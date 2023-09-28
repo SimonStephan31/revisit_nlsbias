@@ -1,0 +1,364 @@
+---
+title: "Analysis"
+output:  
+  html_document:
+    self_contained: yes
+    number_sections: true
+    toc: true  
+    collapsed: false
+    toc_float: true
+    smooth_scroll: false
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+# packages
+library(ez)
+library(reshape2)
+library(reshape)
+library(ggplot2)
+library(plyr)
+library(pastecs)
+library(ez)
+library(data.table)
+library(tidyverse) 
+
+library(showtext)
+library(readr)
+library(dplyr)
+
+font_add_google("Poppins", "Poppins")
+font_add_google("Roboto Mono", "Roboto Mono")
+showtext_auto()
+```
+
+
+```{r}
+tdata <- read_csv("exp_data.csv")
+```
+
+
+# Subject demographics
+
+```{r}
+# demographics 
+
+min(tdata$age)
+max(tdata$age)
+mean(tdata$age)
+sd(tdata$age)
+
+# 1 = male, 2 = female, 3 = other
+table(tdata$gender)
+```
+
+1 = male, 2 = female, 3 = non-binary, 4 = prefer not to say
+
+
+# Data preperation
+
+```{r, echo = FALSE}
+# reorder factor 
+
+# to create chart, the data must be in long format and only contain the relevant dependent variables
+
+# 1. make a subset with only the relevant dvs
+
+tdata_long <- tdata
+
+
+tdata_long$scale_orient <- factor(tdata_long$scale_orient, levels = c("narrow_left", "narrow_right"), 
+                               labels = c("narrow_left", "narrow_right"))
+
+
+
+# Recode ratings so that high values represent broad scope and low values represent narrow scope
+
+dat_narrow_left <- subset(tdata_long, scale_orient == "narrow_left")
+dat_narrow_left$rating_rec <- (dat_narrow_left$DV_rating * 1)
+
+dat_narrow_right <- subset(tdata_long, scale_orient == "narrow_right")
+dat_narrow_right$rating_rec <- (1 - dat_narrow_right$DV_rating)
+
+tdata_long <- rbind(dat_narrow_left, dat_narrow_right)
+
+
+tdata_long$rating_rec <- factor(tdata_long$rating_rec, levels = c(1, 0), labels = c("broad", "narrow"))
+
+
+library(stringr)
+Features <- str_split_fixed(tdata_long$Scenario, "_", 2)[,1]
+Knowledge <- str_split_fixed(tdata_long$Scenario, "_", 2)[,2]
+
+tdata_long$Features <- Features
+tdata_long$Knowledge <- Knowledge
+
+
+table(tdata_long$Features, tdata_long$Knowledge)
+
+tdata_long$Features <- factor(tdata_long$Features, levels = c("spearNet", "featherTooth"), labels = c("feature diagnosability: \nboth similar", "feature diagnosability: \nlatent feature harder"))
+
+tdata_long$Knowledge <- factor(tdata_long$Knowledge, levels = c("notKnow", "noInfo"), labels = c("'you don't know'", "no information"))
+
+```
+# Analyses
+
+```{r}
+tdata_main <- subset(tdata_long, Knowledge == "'you don't know'")
+tdata_supp <- subset(tdata_long, Knowledge == "no information")
+```
+
+
+```{r}
+counts <- tdata_main %>%
+  group_by(Features, rating_rec) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct))
+
+counts
+```
+
+
+```{r}
+
+counts$category <- factor(counts$rating_rec, levels = c("unbiased", "narrow", "broad"), labels = c("unbiased", "narrow l.s.", "broad l.s."))
+
+```
+
+
+
+Get proportion CIs for different categories in each diagnosability condition:
+
+```{r}
+library(PropCIs)
+library(DescTools)
+library(purrr)
+
+counts_spear <- subset(counts, Features == "feature diagnosability: \nboth similar")
+
+counts_feather <- subset(counts, Features == "feature diagnosability: \nlatent feature harder")
+
+
+(MultinomCI(counts_spear$n,
+           conf.level=0.95,
+           method="sisonglaz") -> selection_ci_1)
+
+  
+(MultinomCI(counts_feather$n,
+           conf.level=0.95,
+           method="sisonglaz") -> selection_ci_2)
+  
+
+
+
+ci_low <- c(selection_ci_1[,2], selection_ci_2[,2])
+
+ci_up <- c(selection_ci_1[,3], selection_ci_2[,3])
+
+
+```
+
+
+
+
+```{r}
+plotdata <- counts
+
+plotdata$ci_low <- ci_low
+plotdata$ci_up <- ci_up
+```
+
+
+Plot:
+
+```{r}
+
+library(scales)
+theme_set(theme_light(base_size = 12, base_family = "Poppins"))
+
+g<- ggplot(plotdata, 
+       aes(x = category,
+           y = pct,
+           fill = Features)) +
+  facet_grid( ~ Features)+
+  geom_bar(stat = "identity",
+           position = "dodge") +
+  scale_y_continuous(limits = seq(0, 2),
+                     breaks = seq(0, 1, .25),
+                     expand = c(0,0),
+                     label = percent) +
+  #coord_cartesian(xlim =c(1, 7), ylim = c(0, 1.1))+
+  #coord_cartesian(clip = "off")+
+  geom_text(aes(label = lbl), 
+            size = 3.5,
+            position = position_dodge(width = 1),
+            vjust = -5.5) +
+  scale_fill_manual(name = "Strength",values=c("#66c2a5", "#e78ac3", "#8da0cb", "#a6d854"))+
+  #scale_fill_brewer(palette = "Pastel1") +
+  labs(y = "Percentage", 
+       fill = "Explanatory preference",
+       x = "Explanatory preference")+
+  geom_pointrange(ymin = ci_low, ymax = ci_up, position = position_dodge(width = 0.89), shape = 22, size = 0.3)+
+  #annotate(geom = "hline",yintercept = 0.5, y = 0.5, color = "black", size = 1, linetype='dotted')+
+  #annotate("pointrange", x = plotdata$Transformation, y = plotdata$pct, 
+   #        ymin = plotdata$ci_low, 
+    #       ymax = plotdata$ci_up, 
+     #      colour = "black", size = 0.8, shape = 22, fill = Transformation, fatten = 1)+
+  #annotate("text", x = pvalues_x, y = Inf, label = pvalues, size = 4, vjust = 1.8)+
+  theme(legend.position = "none", axis.title = element_text(size = 20), axis.text = element_text(size = 13, color = "black"),
+        legend.text = element_text(size = 13),legend.title = element_text(size = 13),strip.text.x = element_text(size = 13))+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+g
+
+#ggsave("selections_between.pdf",width=6,height=5)
+ggsave("categories_main.svg",width=7,height=5)
+ggsave("categories_main.pdf",width=7,height=5)
+```
+
+
+
+Tests against chance:
+
+```{r}
+(t2 <- binom.test(plotdata$n[2], 40))
+
+(t4 <- binom.test(plotdata$n[4], 40))
+
+(ci_low <- c(t2$conf.int[1], t4$conf.int[1]))
+
+(ci_up <- c(t2$conf.int[2], t4$conf.int[2]))
+
+(p_values <- c(t2$p.value, t4$p.value))
+
+```
+
+Test if proportion of narrow latent scope biases is different between conditions: 
+
+```{r}
+prop.test(x = c(plotdata$n[2], plotdata$n[4]), n = c(40, 40), alternative = "two.sided", correct = F)
+```
+
+## Analysis with additional test query condition
+
+The additional between-subjects condition was one in which the unobserved feature wasn't mentioned at all in the test query. In what follows, the graphs from above will be recreated and the additional condition will be included.
+
+
+```{r}
+counts <- tdata_long %>%
+  group_by(Knowledge, Features, rating_rec) %>%
+  summarize(n = n()) %>% 
+  mutate(pct = n/sum(n),
+         lbl = scales::percent(pct))
+
+counts
+```
+
+
+```{r}
+
+counts$category <- factor(counts$rating_rec, levels = c("unbiased", "narrow", "broad"), labels = c("unbiased", "narrow l.s.", "broad l.s."))
+counts
+```
+
+
+
+Get proportion CIs for different categories in each diagnosability condition:
+
+```{r}
+library(PropCIs)
+library(DescTools)
+library(purrr)
+
+counts_dontknow_spear <- subset(counts, Knowledge == "'you don't know'" & Features == "feature diagnosability: \nboth similar")
+counts_dontknow_feather <- subset(counts, Knowledge == "'you don't know'" & Features == "feature diagnosability: \nlatent feature harder")
+
+counts_noinf_spear <- subset(counts, Knowledge == "no information" & Features == "feature diagnosability: \nboth similar")
+counts_noinf_feather <- subset(counts, Knowledge == "no information" & Features == "feature diagnosability: \nlatent feature harder")
+
+
+(MultinomCI(counts_dontknow_spear$n,
+           conf.level=0.95,
+           method="sisonglaz") -> selection_ci_1)
+
+  
+(MultinomCI(counts_dontknow_feather$n,
+           conf.level=0.95,
+           method="sisonglaz") -> selection_ci_2)
+  
+
+(MultinomCI(counts_noinf_spear$n,
+           conf.level=0.95,
+           method="sisonglaz") -> selection_ci_3)
+
+(MultinomCI(counts_noinf_feather$n,
+           conf.level=0.95,
+           method="sisonglaz") -> selection_ci_4)
+
+
+
+
+
+ci_low <- c(selection_ci_1[,2], selection_ci_2[,2], selection_ci_3[,2], selection_ci_4[,2])
+
+ci_up <- c(selection_ci_1[,3], selection_ci_2[,3], selection_ci_3[,3], selection_ci_4[,3])
+
+
+```
+
+
+
+
+```{r}
+plotdata <- counts
+
+plotdata$ci_low <- ci_low
+plotdata$ci_up <- ci_up
+```
+
+
+Plot:
+
+```{r}
+
+library(scales)
+theme_set(theme_light(base_size = 12, base_family = "Poppins"))
+
+g<- ggplot(plotdata, 
+       aes(x = category,
+           y = pct,
+           fill = Features)) +
+  facet_grid(Knowledge ~ Features)+
+  geom_bar(stat = "identity",
+           position = "dodge") +
+  scale_y_continuous(limits = seq(0, 2),
+                     breaks = seq(0, 1, .25),
+                     expand = c(0,0),
+                     label = percent) +
+  #coord_cartesian(xlim =c(1, 7), ylim = c(0, 1.1))+
+  #coord_cartesian(clip = "off")+
+  geom_text(aes(label = lbl), 
+            size = 3.5,
+            position = position_dodge(width = 1),
+            vjust = -5.5) +
+  scale_fill_manual(name = "Strength",values=c("#66c2a5", "#e78ac3", "#8da0cb", "#a6d854"))+
+  #scale_fill_brewer(palette = "Pastel1") +
+  labs(y = "Percentage", 
+       fill = "Explanatory preference",
+       x = "Explanatory preference")+
+  geom_pointrange(ymin = ci_low, ymax = ci_up, position = position_dodge(width = 0.89), shape = 22, size = 0.3)+
+  #annotate(geom = "hline",yintercept = 0.5, y = 0.5, color = "black", size = 1, linetype='dotted')+
+  #annotate("pointrange", x = plotdata$Transformation, y = plotdata$pct, 
+   #        ymin = plotdata$ci_low, 
+    #       ymax = plotdata$ci_up, 
+     #      colour = "black", size = 0.8, shape = 22, fill = Transformation, fatten = 1)+
+  #annotate("text", x = pvalues_x, y = Inf, label = pvalues, size = 4, vjust = 1.8)+
+  theme(legend.position = "none", axis.title = element_text(size = 20), axis.text = element_text(size = 13, color = "black"),
+        legend.text = element_text(size = 13),legend.title = element_text(size = 13),strip.text.x = element_text(size = 13))+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+g
+```
+
+
